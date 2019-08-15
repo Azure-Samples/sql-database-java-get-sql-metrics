@@ -4,12 +4,12 @@ languages:
 - java
 products:
 - azure
-services: Sql
-platforms: java
-author: yaohaizh
+extensions:
+- services: Sql
+- platforms: java
 ---
 
-## Getting Started with Sql - Getting Sql Server Metrics - in Java ##
+# Getting Started with Sql - Getting Sql Server Metrics - in Java #
 
 
   Azure SQL sample for getting SQL Server and Databases metrics
