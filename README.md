@@ -4,9 +4,8 @@ languages:
 - java
 products:
 - azure
-extensions:
-- services: Sql
-- platforms: java
+description: "Getting Started with Sql - Getting Sql Server Metrics - in Java"
+urlFragment: sql-database-java-get-sql-metrics
 ---
 
 # Getting Started with Sql - Getting Sql Server Metrics - in Java #
