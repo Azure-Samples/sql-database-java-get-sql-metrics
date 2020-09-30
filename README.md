@@ -5,8 +5,8 @@ languages:
 products:
 - azure
 extensions:
-- services: Sql
-- platforms: java
+  services: Sql
+  platforms: java
 ---
 
 # Getting Started with Sql - Getting Sql Server Metrics - in Java #
