@@ -1,45 +1,40 @@
-/**
- * Copyright (c) Microsoft Corporation. All rights reserved.
- * Licensed under the MIT License. See License.txt in the project root for
- * license information.
- */
-package com.microsoft.azure.management.sql.samples;
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+package com.azure.resourcemanager.sql.samples;
 
-import com.microsoft.azure.AzureEnvironment;
-import com.microsoft.azure.AzureResponseBuilder;
-import com.microsoft.azure.credentials.ApplicationTokenCredentials;
-import com.microsoft.azure.management.Azure;
-import com.microsoft.azure.management.monitor.MetadataValue;
-import com.microsoft.azure.management.monitor.Metric;
-import com.microsoft.azure.management.monitor.MetricCollection;
-import com.microsoft.azure.management.monitor.MetricDefinition;
-import com.microsoft.azure.management.monitor.MetricValue;
-import com.microsoft.azure.management.monitor.TimeSeriesElement;
-import com.microsoft.azure.management.resources.fluentcore.arm.Region;
-import com.microsoft.azure.management.resources.fluentcore.utils.SdkContext;
-import com.microsoft.azure.management.samples.Utils;
-import com.microsoft.azure.management.sql.SampleName;
-import com.microsoft.azure.management.sql.SqlDatabase;
-import com.microsoft.azure.management.sql.SqlDatabaseMetric;
-import com.microsoft.azure.management.sql.SqlDatabaseUsageMetric;
-import com.microsoft.azure.management.sql.SqlElasticPool;
-import com.microsoft.azure.management.sql.SqlServer;
-import com.microsoft.azure.management.sql.SqlSubscriptionUsageMetric;
-import com.microsoft.azure.serializer.AzureJacksonAdapter;
-import com.microsoft.rest.LogLevel;
-import com.microsoft.rest.RestClient;
-import org.joda.time.DateTime;
-import org.joda.time.DateTimeZone;
-import org.joda.time.Period;
 
-import java.io.File;
+import com.azure.core.credential.TokenCredential;
+import com.azure.core.http.policy.HttpLogDetailLevel;
+import com.azure.core.http.rest.PagedIterable;
+import com.azure.core.management.AzureEnvironment;
+import com.azure.identity.DefaultAzureCredentialBuilder;
+import com.azure.resourcemanager.AzureResourceManager;
+import com.azure.resourcemanager.monitor.fluent.models.MetadataValueInner;
+import com.azure.resourcemanager.monitor.models.Metric;
+import com.azure.resourcemanager.monitor.models.MetricCollection;
+import com.azure.resourcemanager.monitor.models.MetricDefinition;
+import com.azure.resourcemanager.monitor.models.MetricValue;
+import com.azure.resourcemanager.monitor.models.TimeSeriesElement;
+import com.azure.core.management.Region;
+import com.azure.core.management.profile.AzureProfile;
+import com.azure.resourcemanager.resources.fluentcore.utils.ResourceManagerUtils;
+import com.azure.resourcemanager.samples.Utils;
+import com.azure.resourcemanager.sql.models.SampleName;
+import com.azure.resourcemanager.sql.models.SqlDatabase;
+import com.azure.resourcemanager.sql.models.SqlDatabaseMetric;
+import com.azure.resourcemanager.sql.models.SqlDatabaseUsageMetric;
+import com.azure.resourcemanager.sql.models.SqlServer;
+import com.azure.resourcemanager.sql.models.SqlSubscriptionUsageMetric;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Azure SQL sample for getting SQL Server and Databases metrics
@@ -53,18 +48,17 @@ import java.util.concurrent.TimeUnit;
 public class GettingSqlServerMetrics {
     /**
      * Main function which runs the actual sample.
-     * @param azure instance of the azure client
+     * @param azureResourceManager instance of the azure client
      * @return true if sample runs successfully
      */
-    public static boolean runSample(Azure azure) {
-        final String sqlServerName = Utils.createRandomName("sqltest");
+    public static boolean runSample(AzureResourceManager azureResourceManager) throws ClassNotFoundException, SQLException {
+        final String sqlServerName = Utils.randomResourceName(azureResourceManager, "sqltest", 20);
         final String dbName = "dbSample";
         final String epName = "epSample";
-        final String rgName = Utils.createRandomName("rgsql");
+        final String rgName = Utils.randomResourceName(azureResourceManager, "rgsql", 20);
         final String administratorLogin = "sqladmin3423";
-        // [SuppressMessage("Microsoft.Security", "CS002:SecretInNextLine", Justification="Serves as an example, not for deployment. Please change when using this in your code.")]
-        final String administratorPassword = "myS3curePwd";
-        DateTime startTime = DateTime.now().toDateTime(DateTimeZone.UTC).minusDays(1);
+        final String administratorPassword = Utils.password();
+        OffsetDateTime startTime = OffsetDateTime.now().minusDays(1);
 
         try {
             // Check if the expected SQL driver is available
@@ -74,13 +68,13 @@ public class GettingSqlServerMetrics {
             // Create a SQL Server.
             System.out.println("Creating a SQL server to be used for getting various metrics");
 
-            SqlServer sqlServer = azure.sqlServers().define(sqlServerName)
+            SqlServer sqlServer = azureResourceManager.sqlServers().define(sqlServerName)
                 .withRegion(Region.US_EAST)
                 .withNewResourceGroup(rgName)
                 .withAdministratorLogin(administratorLogin)
                 .withAdministratorPassword(administratorPassword)
                 .defineFirewallRule("allowAll")
-                    .withIPAddressRange("0.0.0.1", "255.255.255.255")
+                    .withIpAddressRange("0.0.0.1", "255.255.255.255")
                     .attach()
                 .defineElasticPool(epName)
                     .withStandardPool()
@@ -103,70 +97,74 @@ public class GettingSqlServerMetrics {
                 administratorPassword);
 
             // Establish the connection.
-            Connection connection = DriverManager.getConnection(connectionToSqlTestUrl);
+            try (Connection connection = DriverManager.getConnection(connectionToSqlTestUrl);
+                 Statement statement = connection.createStatement();) {
 
-            // ============================================================
-            // Create and execute a "select" SQL statement on the sample database.
-            System.out.println("Creating and executing a \"SELECT\" SQL statement on the sample database");
+                // ============================================================
+                // Create and execute a "select" SQL statement on the sample database.
+                System.out.println("Creating and executing a \"SELECT\" SQL statement on the sample database");
 
-            String selectSql = "SELECT TOP 10 Title, FirstName, LastName from SalesLT.Customer";
-            Statement statement = connection.createStatement();
-            System.out.println("SELECT TOP 10 Title, FirstName, LastName from SalesLT.Customer");
-            ResultSet resultSet = statement.executeQuery(selectSql);
+                String selectSql = "SELECT TOP 10 Title, FirstName, LastName from SalesLT.Customer";
 
-            // Print results from select statement
-            while (resultSet.next()) {
-                System.out.println(resultSet.getString(2) + " "
-                    + resultSet.getString(3));
+                System.out.println("SELECT TOP 10 Title, FirstName, LastName from SalesLT.Customer");
+                try (ResultSet resultSet = statement.executeQuery(selectSql);) {
+
+                    // Print results from select statement
+                    while (resultSet.next()) {
+                        System.out.println(resultSet.getString(2) + " "
+                            + resultSet.getString(3));
+                    }
+                }
+
+                // ============================================================
+                // Create and execute an "INSERT" SQL statement on the sample database.
+                System.out.println("Creating and executing an \"INSERT\" SQL statement on the sample database");
+                // Create and execute an INSERT SQL prepared statement.
+                String insertSql = "INSERT INTO SalesLT.Product (Name, ProductNumber, Color, StandardCost, ListPrice, SellStartDate) VALUES "
+                    + "('Bike', 'B1', 'Blue', 50, 120, '2016-01-01');";
+
+                try (PreparedStatement prepsInsertProduct = connection.prepareStatement(
+                    insertSql,
+                    Statement.RETURN_GENERATED_KEYS);) {
+                    prepsInsertProduct.execute();
+
+                    // Retrieve the generated key from the insert.
+                    try (ResultSet resultSet2 = prepsInsertProduct.getGeneratedKeys();) {
+                        // Print the ID of the inserted row.
+                        while (resultSet2.next()) {
+                            System.out.println("Generated: " + resultSet2.getString(1));
+                        }
+                    }
+                }
+
+                // ============================================================
+                // Create a new table into the SQL Server database and insert one value.
+                System.out.println("Creating a new table into the SQL Server database and insert one value");
+
+                try (Statement stmt = connection.createStatement();) {
+
+                    String sqlCommand = "CREATE TABLE [Sample_Test] ([Name] [varchar](30) NOT NULL)";
+                    stmt.execute(sqlCommand);
+
+                    sqlCommand = "INSERT Sample_Test VALUES ('Test')";
+                    stmt.execute(sqlCommand);
+
+                    // ============================================================
+                    // Run a "select" query for the new table.
+                    System.out.println("Running a \"SELECT\" query for the new table");
+
+                    sqlCommand = "SELECT * FROM Sample_Test;";
+                    try (ResultSet resultSet = stmt.executeQuery(sqlCommand);) {
+                        // Print results from select statement
+                        System.out.println("SELECT * FROM Sample_Test");
+                        while (resultSet.next()) {
+                            System.out.format("\t%s%n", resultSet.getString(1));
+                        }
+                    }
+                }
             }
 
-            // ============================================================
-            // Create and execute an "INSERT" SQL statement on the sample database.
-            System.out.println("Creating and executing an \"INSERT\" SQL statement on the sample database");
-            // Create and execute an INSERT SQL prepared statement.
-            String insertSql = "INSERT INTO SalesLT.Product (Name, ProductNumber, Color, StandardCost, ListPrice, SellStartDate) VALUES "
-                + "('Bike', 'B1', 'Blue', 50, 120, '2016-01-01');";
-
-            PreparedStatement prepsInsertProduct = connection.prepareStatement(
-                insertSql,
-                Statement.RETURN_GENERATED_KEYS);
-            prepsInsertProduct.execute();
-
-            // Retrieve the generated key from the insert.
-            ResultSet resultSet2 = prepsInsertProduct.getGeneratedKeys();
-            // Print the ID of the inserted row.
-            while (resultSet2.next()) {
-                System.out.println("Generated: " + resultSet2.getString(1));
-            }
-
-            // ============================================================
-            // Create a new table into the SQL Server database and insert one value.
-            System.out.println("Creating a new table into the SQL Server database and insert one value");
-
-            Statement stmt = connection.createStatement();
-
-            String sqlCommand = "CREATE TABLE [Sample_Test] ([Name] [varchar](30) NOT NULL)";
-            stmt.execute(sqlCommand);
-
-            sqlCommand = "INSERT Sample_Test VALUES ('Test')";
-            stmt.execute(sqlCommand);
-
-            // ============================================================
-            // Run a "select" query for the new table.
-            System.out.println("Running a \"SELECT\" query for the new table");
-
-            sqlCommand = "SELECT * FROM Sample_Test;";
-            resultSet = stmt.executeQuery(sqlCommand);
-            // Print results from select statement
-            System.out.println("SELECT * FROM Sample_Test");
-            while (resultSet.next()) {
-                System.out.format("\t%s\n", resultSet.getString(1));
-            }
-
-            // Close the connection to the "test" database
-            connection.close();
-
-            SdkContext.sleep(6 * 60 * 1000);
+            ResourceManagerUtils.sleep(Duration.ofMinutes(6));
 
 
             // ============================================================
@@ -174,7 +172,7 @@ public class GettingSqlServerMetrics {
             System.out.println("Listing the SQL subscription usage metrics for the current selected region");
 
 
-            List<SqlSubscriptionUsageMetric> subscriptionUsageMetrics = azure.sqlServers().listUsageByRegion(Region.US_EAST);
+            List<SqlSubscriptionUsageMetric> subscriptionUsageMetrics = azureResourceManager.sqlServers().listUsageByRegion(Region.US_EAST);
             for (SqlSubscriptionUsageMetric usageMetric : subscriptionUsageMetrics) {
                 Utils.print(usageMetric);
             }
@@ -194,9 +192,8 @@ public class GettingSqlServerMetrics {
             // List the SQL database CPU metrics for the sample database.
             System.out.println("Listing the SQL database CPU metrics for the sample database");
 
-            DateTime endTime = DateTime.now().toDateTime(DateTimeZone.UTC);
-            String filter = String.format("name/value eq 'cpu_percent' and startTime eq '%s' and endTime eq '%s'", startTime, endTime);
-
+            OffsetDateTime endTime = OffsetDateTime.now();
+            String filter = String.format("name/value eq 'cpu_percent' and startTime eq '%s' and endTime eq '%s'", startTime.toInstant(), endTime.toInstant());
 
             List<SqlDatabaseMetric> dbMetrics = db.listMetrics(filter);
             for (SqlDatabaseMetric metric : dbMetrics) {
@@ -207,9 +204,8 @@ public class GettingSqlServerMetrics {
             // List the SQL database metrics for the sample database.
             System.out.println("Listing the SQL database metrics for the sample database");
 
-            endTime = DateTime.now().toDateTime(DateTimeZone.UTC);
-            filter = String.format("startTime eq '%s' and endTime eq '%s'", startTime, endTime);
-
+            endTime = OffsetDateTime.now();
+            filter = String.format("startTime eq '%s' and endTime eq '%s'", startTime.toInstant(), endTime.toInstant());
 
             dbMetrics = db.listMetrics(filter);
             for (SqlDatabaseMetric metric : dbMetrics) {
@@ -218,10 +214,9 @@ public class GettingSqlServerMetrics {
 
             // ============================================================
             // Use Monitor Service to list the SQL server metrics.
-            System.out.println("Using Monitor Service to list the SQL server metrics");
-            List<MetricDefinition> metricDefinitions = azure.metricDefinitions().listByResource(sqlServer.id());
 
-            SqlElasticPool ep = sqlServer.elasticPools().get(epName);
+            System.out.println("Using Monitor Service to list the SQL server metrics");
+            PagedIterable<MetricDefinition> metricDefinitions = azureResourceManager.metricDefinitions().listByResource(sqlServer.id());
 
             for (MetricDefinition metricDefinition : metricDefinitions) {
                 // find metric definition for "DTU used" and "Storage used"
@@ -232,11 +227,11 @@ public class GettingSqlServerMetrics {
                         .startingFrom(startTime)
                         .endsBefore(endTime)
                         .withAggregation("Average")
-                        .withInterval(Period.minutes(5))
-                        .withOdataFilter(String.format("ElasticPoolResourceId eq '%s'", ep.id()))
+                        .withInterval(Duration.ofMinutes(5))
+                        .withOdataFilter(String.format("DatabaseResourceId eq '%s'", db.id()))
                         .execute();
 
-                    System.out.format("SQL server \"%s\" %s metrics\n", sqlServer.name(), metricDefinition.name().localizedValue());
+                    System.out.format("SQL server \"%s\" %s metrics%n", sqlServer.name(), metricDefinition.name().localizedValue());
                     System.out.println("\tNamespace: " + metricCollection.namespace());
                     System.out.println("\tQuery time: " + metricCollection.timespan());
                     System.out.println("\tTime Grain: " + metricCollection.interval());
@@ -249,12 +244,12 @@ public class GettingSqlServerMetrics {
                         System.out.println("\tTime Series: ");
                         for (TimeSeriesElement timeElement : metric.timeseries()) {
                             System.out.println("\t\tMetadata: ");
-                            for (MetadataValue metadata : timeElement.metadatavalues()) {
+                            for (MetadataValueInner metadata : timeElement.metadatavalues()) {
                                 System.out.println("\t\t\t" + metadata.name().localizedValue() + ": " + metadata.value());
                             }
                             System.out.println("\t\tData: ");
                             for (MetricValue data : timeElement.data()) {
-                                System.out.println("\t\t\t" + data.timeStamp()
+                                System.out.println("\t\t\t" + data.timestamp()
                                     + " : (Min) " + data.minimum()
                                     + " : (Max) " + data.maximum()
                                     + " : (Avg) " + data.average()
@@ -270,7 +265,7 @@ public class GettingSqlServerMetrics {
             // ============================================================
             // Use Monitor Service to list the SQL Database metrics.
             System.out.println("Using Monitor Service to list the SQL Database metrics");
-            metricDefinitions = azure.metricDefinitions().listByResource(db.id());
+            metricDefinitions = azureResourceManager.metricDefinitions().listByResource(db.id());
 
             for (MetricDefinition metricDefinition : metricDefinitions) {
                 // find metric definition for Transactions
@@ -296,12 +291,12 @@ public class GettingSqlServerMetrics {
                         System.out.println("\tTime Series: ");
                         for (TimeSeriesElement timeElement : metric.timeseries()) {
                             System.out.println("\t\tMetadata: ");
-                            for (MetadataValue metadata : timeElement.metadatavalues()) {
+                            for (MetadataValueInner metadata : timeElement.metadatavalues()) {
                                 System.out.println("\t\t\t" + metadata.name().localizedValue() + ": " + metadata.value());
                             }
                             System.out.println("\t\tData: ");
                             for (MetricValue data : timeElement.data()) {
-                                System.out.println("\t\t\t" + data.timeStamp()
+                                System.out.println("\t\t\t" + data.timestamp()
                                     + " : (Min) " + data.minimum()
                                     + " : (Max) " + data.maximum()
                                     + " : (Avg) " + data.average()
@@ -314,24 +309,19 @@ public class GettingSqlServerMetrics {
                 }
             }
 
-
             // Delete the SQL Servers.
             System.out.println("Deleting the Sql Server");
-            azure.sqlServers().deleteById(sqlServer.id());
+            azureResourceManager.sqlServers().deleteById(sqlServer.id());
             return true;
-        } catch (Exception f) {
-            System.out.println(f.getMessage());
-            f.printStackTrace();
         } finally {
             try {
                 System.out.println("Deleting Resource Group: " + rgName);
-                azure.resourceGroups().deleteByName(rgName);
+                azureResourceManager.resourceGroups().beginDeleteByName(rgName);
                 System.out.println("Deleted Resource Group: " + rgName);
             } catch (Exception e) {
                 System.out.println("Did not create any resources in Azure. No clean up is necessary");
             }
         }
-        return false;
     }
 
     /**
@@ -340,23 +330,21 @@ public class GettingSqlServerMetrics {
      */
     public static void main(String[] args) {
         try {
-            final File credFile = new File(System.getenv("AZURE_AUTH_LOCATION"));
+            final AzureProfile profile = new AzureProfile(AzureEnvironment.AZURE);
+            final TokenCredential credential = new DefaultAzureCredentialBuilder()
+                .authorityHost(profile.getEnvironment().getActiveDirectoryEndpoint())
+                .build();
 
-
-            ApplicationTokenCredentials credentials = ApplicationTokenCredentials.fromFile(credFile);
-            RestClient restClient = new RestClient.Builder()
-                .withBaseUrl(AzureEnvironment.AZURE, AzureEnvironment.Endpoint.RESOURCE_MANAGER)
-                .withSerializerAdapter(new AzureJacksonAdapter())
-                .withResponseBuilderFactory(new AzureResponseBuilder.Factory())
-                .withReadTimeout(150, TimeUnit.SECONDS)
-                .withLogLevel(LogLevel.BODY)
-                .withCredentials(credentials).build();
-            Azure azure = Azure.authenticate(restClient, credentials.domain(), credentials.defaultSubscriptionId()).withDefaultSubscription();
+            AzureResourceManager azureResourceManager = AzureResourceManager
+                .configure()
+                .withLogLevel(HttpLogDetailLevel.BASIC)
+                .authenticate(credential, profile)
+                .withDefaultSubscription();
 
             // Print selected subscription
-            System.out.println("Selected subscription: " + azure.subscriptionId());
+            System.out.println("Selected subscription: " + azureResourceManager.subscriptionId());
 
-            runSample(azure);
+            runSample(azureResourceManager);
         } catch (Exception e) {
             System.out.println(e.getMessage());
             e.printStackTrace();
